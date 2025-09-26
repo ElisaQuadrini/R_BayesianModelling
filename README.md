@@ -1,1 +1,1 @@
-# R_BayesianModelling
+# Radiocarbon Measurement: the use of Bayesian techniques 
