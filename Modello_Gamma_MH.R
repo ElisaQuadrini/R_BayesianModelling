@@ -16,21 +16,9 @@ X[, "Age"] <- scale(X[, "Age"])
 head(X)
 dim(X)
 
-p <- ncol(X)
-n <- nrow(mod_data)
-
-y <- mod_data$Error
-
-
-#### Con metropolis 
-
-
 # ----- INPUT -----
 
 # Design matrix X and response y
-# Make sure to define or load them here
-# X <- ...
-# y <- ...
 
 n <- nrow(X)
 p <- ncol(X)
@@ -44,8 +32,6 @@ a <- 1
 b <- 0.01
 delta <- 100
 
-# sigma_log_alpha <- 0.1         # std dev on log-alpha proposal
-
 # MCMC settings
 S <- 10000
 beta_curr <- as.vector(lm(y ~ X - 1)$coefficients)
@@ -53,24 +39,10 @@ alpha_curr <- 2
 
 samples <- matrix(NA, nrow = S, ncol = p+1)
 colnames(samples) <- c(paste0("beta", 1:p), "alpha")
-accepted <- 0
 
-# Inizializza strutture per proposal adattiva
+# Initialization structures for the adaptive proposal
 m_j <- rep(0, p)
 s2_j <- rep(1, p)  # varianze iniziali di fallback
-
-# Adattamento: media e varianza fino all’iterazione precedente
-if (s > 1) {
-  for (j in 1:p) {
-    m_j[j] <- mean(samples[1:(s - 1), j])
-    s2_j[j] <- var(samples[1:(s - 1), j])
-    if (is.na(s2_j[j]) || s2_j[j] == 0) s2_j[j] <- 1e-6
-    beta_prop[j] <- rnorm(1, mean = m_j[j], sd = sqrt(s2_j[j]))
-  }
-} else {
-  beta_prop <- as.vector(rmvnorm(1, mean = beta_curr, sigma = diag(0.01, p)))
-}
-
 
 
 # ----- LOG POSTERIOR FUNCTION -----
@@ -90,102 +62,64 @@ log_posterior <- function(beta, alpha, y, X, mu_beta, Sigma_beta, a, b) {
 }
 
 # ----- MCMC LOOP -----
-
 set.seed(42)
+
 for (s in 1:S) {
   
-  beta_prop <- beta_curr
-  
-  # Adattamento: media e varianza fino all’iterazione precedente
-  # Step for beta
-  if (s <= 500) {
-    # Proposal iniziale: random walk con varianza fissa
-    beta_prop <- as.vector(rmvnorm(1, mean = beta_curr, sigma = diag(0.1, p)))
+  # Proposal for each component of beta 
+  for (j in 1:p) {
     
-  } else {
-    # Adaptive proposal: media e varianza empirica + stabilizzatore
-    for (j in 1:p) {
-      m_j[j]   <- mean(samples[1:(s - 1), j])
-      s2_j[j]  <- var(samples[1:(s - 1), j])
-      s2_j[j]  <- s2_j[j] + 1e-2  # aggiunta di rumore per evitare sd ≈ 0
-      beta_prop[j] <- rnorm(1, mean = m_j[j], sd = sqrt(s2_j[j]))
+    if (s > 1) {
+      m_j[j] <- mean(samples[1:(s - 1), j])
+      s2_j[j] <- var(samples[1:(s - 1), j])
+      if (is.na(s2_j[j]) || s2_j[j] == 0) s2_j[j] <- 1e-6
+      beta_j_prop <- rnorm(1, mean = m_j[j], sd = sqrt(s2_j[j]))
+    } else {
+      beta_j_prop <- rnorm(1, mean = beta_curr[j], sd = sqrt(0.01))
     }
+    
+    beta_prop <- beta_curr
+    beta_prop[j] <- beta_j_prop
+    
+    log_post_curr <- log_posterior(beta_curr, alpha_curr, y, X, mu_beta, Sigma_beta, a, b)
+    log_post_prop <- log_posterior(beta_prop, alpha_curr, y, X, mu_beta, Sigma_beta, a, b)
+    
+    log_q_ratio <- dnorm(beta_curr[j], mean = m_j[j], sd = sqrt(s2_j[j]), log = TRUE) -
+      dnorm(beta_j_prop, mean = m_j[j], sd = sqrt(s2_j[j]), log = TRUE)
+    
+    log_r <- log_post_prop - log_post_curr + log_q_ratio
+    
+    if (is.finite(log_r) && log(runif(1)) < log_r) { beta_curr[j] <- beta_j_prop }
   }
   
-  
-  ### --- Proposal per alpha: Gamma centrata in alpha_curr ---
+  # Proposal for alpha
   alpha_prop <- rgamma(1, shape = delta, rate = delta / alpha_curr)
   
-  # Calcolo log-posterior
   log_post_curr <- log_posterior(beta_curr, alpha_curr, y, X, mu_beta, Sigma_beta, a, b)
-  log_post_prop <- log_posterior(beta_prop, alpha_prop, y, X, mu_beta, Sigma_beta, a, b)
+  log_post_prop <- log_posterior(beta_curr, alpha_prop, y, X, mu_beta, Sigma_beta, a, b)
   
-  ### --- Log proposal ratio per MH ---
-  # q(curr | prop) - q(prop | curr)
   log_q_ratio <- dgamma(alpha_curr, shape = delta, rate = delta / alpha_prop, log = TRUE) -
     dgamma(alpha_prop, shape = delta, rate = delta / alpha_curr, log = TRUE)
   
-  # MH ratio
-  log_r <- log_post_prop - log_post_curr + log_q_ratio
+  log_r_alpha <- log_post_prop - log_post_curr + log_q_ratio
   
-  # Accept/reject
-  if (is.finite(log_r) && log(runif(1)) < log_r) {
-    beta_curr <- beta_prop
+  if (is.finite(log_r_alpha) && log(runif(1)) < log_r_alpha) {
     alpha_curr <- alpha_prop
-    accepted <- accepted + 1
   }
   
+  # ----- OUTPUT -----
   samples[s, ] <- c(beta_curr, alpha_curr)
 }
 
 
-# ----- OUTPUT -----
-cat("Acceptance rate:", accepted / S, "\n")
-summary <- apply(samples, 2, mean)
-print(summary)
 
-apply(samples, 2, var)
 
 ### CONVERGENCE CHECKS
-par(mfrow = c(3,2), mar = c(3,3,2,1), bty = "l")
-for(j in 1:4){
-  plot(samples[1:100,j], type = "l", main = paste0("Beta_",j-1),
-       ylab = "")
-} 
-par(mfrow = c(3,2), mar = c(3,3,2,1), bty = "l")
-for(j in 5:8){
-  if (j == 8)
-  {
-    plot(samples[1:100,j], type = "l", main = "alpha",
-         ylab = "")
-  }
-  else {
-    plot(samples[1:100,j], type = "l", main = paste0("Beta_",j-1),
-         ylab = "")
-  }
-  
-}
-
-par(mfrow = c(2,2))
-for(j in 1:4){
-  acf(samples[,j])
-}
-
-
-par(mfrow = c(3,2), mar = c(3,3,2,1))
-for(j in 5:8){
-  acf(samples[,j])
-}
-
-
-ess = apply(samples[,1:8], 2, effectiveSize) # Effective sample size for each beta
-ess
 
 thin <- 10
 samples_thin <- samples[seq(1, nrow(samples), by = thin), ]
 
-ess = apply(samples_thin[,1:8], 2, effectiveSize) # Effective sample size for each beta
-ess
+
 
 par(mfrow = c(2,2))
 for(j in 1:4){
@@ -266,52 +200,3 @@ abline(v = mean(y), col= "red", lwd = 2)
 
 
 
-# ----- MCMC LOOP -----
-set.seed(42)
-
-for (s in 1:S) {
-  
-  # Proposal for each component of beta 
-  for (j in 1:p) {
-    
-    if (s > 1) {
-      m_j[j] <- mean(samples[1:(s - 1), j])
-      s2_j[j] <- var(samples[1:(s - 1), j])
-      if (is.na(s2_j[j]) || s2_j[j] == 0) s2_j[j] <- 1e-6
-      beta_j_prop <- rnorm(1, mean = m_j[j], sd = sqrt(s2_j[j]))
-    } else {
-      beta_j_prop <- rnorm(1, mean = beta_curr[j], sd = sqrt(0.01))
-    }
-    
-    beta_prop <- beta_curr
-    beta_prop[j] <- beta_j_prop
-    
-    log_post_curr <- log_posterior(beta_curr, alpha_curr, y, X, mu_beta, Sigma_beta, a, b)
-    log_post_prop <- log_posterior(beta_prop, alpha_curr, y, X, mu_beta, Sigma_beta, a, b)
-    
-    log_q_ratio <- dnorm(beta_curr[j], mean = m_j[j], sd = sqrt(s2_j[j]), log = TRUE) -
-      dnorm(beta_j_prop, mean = m_j[j], sd = sqrt(s2_j[j]), log = TRUE)
-    
-    log_r <- log_post_prop - log_post_curr + log_q_ratio
-    
-    if (is.finite(log_r) && log(runif(1)) < log_r) { beta_curr[j] <- beta_j_prop }
-  }
-  
-  # Proposal for alpha
-  alpha_prop <- rgamma(1, shape = delta, rate = delta / alpha_curr)
-  
-  log_post_curr <- log_posterior(beta_curr, alpha_curr, y, X, mu_beta, Sigma_beta, a, b)
-  log_post_prop <- log_posterior(beta_curr, alpha_prop, y, X, mu_beta, Sigma_beta, a, b)
-  
-  log_q_ratio <- dgamma(alpha_curr, shape = delta, rate = delta / alpha_prop, log = TRUE) -
-    dgamma(alpha_prop, shape = delta, rate = delta / alpha_curr, log = TRUE)
-  
-  log_r_alpha <- log_post_prop - log_post_curr + log_q_ratio
-  
-  if (is.finite(log_r_alpha) && log(runif(1)) < log_r_alpha) {
-    alpha_curr <- alpha_prop
-  }
-  
-  # ----- OUTPUT -----
-  samples[s, ] <- c(beta_curr, alpha_curr)
-}
