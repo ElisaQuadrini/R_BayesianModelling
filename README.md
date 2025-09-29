@@ -10,7 +10,7 @@ This project applies Bayesian modeling to radiocarbon (C14) measurements using d
 - **Exploratory analysis**: Checked the distribution of the response variable (*Error* of radiocarbon age estimation), which was positive and right-skewed, suggesting the use of a Gamma model.  
 - **Model specification**: Defined a Bayesian Gamma regression model with identity link, parameterized by shape parameter α and mean µ depending on covariates.  
 - **Prior distributions**: Assigned a Normal prior for regression coefficients β (weakly informative) and a Gamma prior for α.  
-- **Posterior formulation**: Derived the joint posterior distribution \( p(\beta, \alpha | y) \propto p(y|\beta,\alpha)p(\beta)p(\alpha) \).  
+- **Posterior formulation**: Derived the joint posterior distribution.
 - **Model implementation**:  
   - Used a **Metropolis-Hastings algorithm** with adaptive proposals to approximate the posterior distribution of β and α.  
   - Initialized β with OLS estimates and α = 2, applying thinning to improve convergence.  
